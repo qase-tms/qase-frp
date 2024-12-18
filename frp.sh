@@ -131,8 +131,13 @@ else
   local_port=80
 fi
 
-# Find IP address of the hostname
-local_ip=$(host $hostname | awk '/has address/ { print $4 ; exit }')
+# Check if hostname is an IP address
+if [[ $hostname =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  local_ip=$hostname
+else
+  # Find IP address of the hostname
+  local_ip=$(host $hostname | awk '/has address/ { print $4 ; exit }')
+fi
 
 # Write frpc configuration
 write_fprc_config
