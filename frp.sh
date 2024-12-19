@@ -113,13 +113,15 @@ fi
 
 ensure_frpc
 
-if [[ -f "frpc.toml" ]]; then
-  # Fetch current auth token from frpc.toml
-  auth_token=$(grep 'auth.token' frpc.toml | sed -E 's/.*auth\.token *= *"([^"]+)".*/\1/')
-else
-  auth_token=${2:-}
-  if [[ -z "$auth_token" ]]; then
-    read -p "Enter your authentication token: " auth_token
+auth_token=${2:-}
+if [[ -z "$auth_token" ]]; then
+  if [[ -f "frpc.toml" ]]; then
+    # Fetch current auth token from frpc.toml
+    auth_token=$(grep 'auth.token' frpc.toml | sed -E 's/.*auth\.token *= *"([^"]+)".*/\1/')
+  else
+    if [[ -z "$auth_token" ]]; then
+      read -p "Enter your authentication token: " auth_token
+    fi
   fi
 fi
 
