@@ -5,6 +5,7 @@ set -o pipefail
 set -e
 
 FRP_SERVER="${FRP_SERVER:-frps.qase.io}"
+TUNNEL_HOST_SUFFIX="${TUNNEL_HOST_SUFFIX:-qase.frp}"
 
 # Function to fetch the latest frp download URL dynamically
 get_latest_frpc_url() {
@@ -95,7 +96,7 @@ EOF
 
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
     echo "Please, specify the following URL in your Environment for Cloud Test Run: "
-    echo "http://${proxy_name}.${FRP_SERVER}/"
+    echo "https://${proxy_name}.${TUNNEL_HOST_SUFFIX}/"
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 }
 
@@ -136,7 +137,14 @@ if [[ $hostname =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   local_ip=$hostname
 else
   # Find IP address of the hostname
-  local_ip=$(host $hostname | awk '/has address/ { print $4 ; exit }')
+  local_ip=$(awk -v host="$hostname" '$2 == host { print $1 }' /etc/hosts | head -n 1)
+  if [[ -z "$local_ip" ]]; then
+    local_ip=$(host $hostname | awk '/has address/ { print $4 ; exit }' || true)
+  fi
+  if [[ -z "$local_ip" ]]; then
+    echo "Error: Could not resolve the IP address of the hostname: $hostname"
+    exit 1
+  fi
 fi
 
 # Write frpc configuration
