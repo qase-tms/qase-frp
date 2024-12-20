@@ -5,7 +5,7 @@ This repository contains a script that allows you to create a tunnel to your pri
 You can run the script with the following command on MacOS or Linux:
 ```bash
 wget -O frp.sh https://raw.githubusercontent.com/qase-tms/qase-frp/refs/heads/main/frp.sh && chmod +x frp.sh
-./frp.sh private_website_hostname:port auth_token
+./frp.sh -l private.website.local:80 -a "auth_token"
 ```
 Auth token is a token that Qase’s support can provide. In the future, you will be able to specify your Qase API token here.
 
@@ -15,6 +15,7 @@ To do it, create a new environment or update the existing one in your Qase proje
 
 Run a cloud test run in Qase and specify the created/updated environment.
 
+You can also specify -t option to specify tunnel name. It should be unique. If you don't specify it, the script will generate a random name.
 
 ## Manual configuration
 1. Install FRP client.

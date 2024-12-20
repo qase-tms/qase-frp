@@ -7,6 +7,29 @@ set -e
 FRP_SERVER="${FRP_SERVER:-frps.qase.io}"
 TUNNEL_HOST_SUFFIX="${TUNNEL_HOST_SUFFIX:-qase.frp}"
 
+local_hostname=''
+tunnel_name=''
+auth_token=''
+
+print_usage() {
+  echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-h]"
+  echo "Options:"
+  echo "  -h  Show this help message and exit"
+  echo "  -l  Local hostname and port to tunnel (e.g. private.website.dev:8080)"
+  echo "  -a  Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
+  echo "  -t  Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
+  exit 1
+}
+
+while getopts 'l:a:t:h' flag; do
+  case "${flag}" in
+    l) local_hostname="${OPTARG}" ;;
+    a) auth_token="${OPTARG}" ;;
+    t) tunnel_name="${OPTARG}" ;;
+    *) print_usage ;;
+  esac
+done
+
 # Function to fetch the latest frp download URL dynamically
 get_latest_frpc_url() {
     local os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -68,10 +91,14 @@ ensure_frpc() {
 
 # Function to write the frpc configuration
 write_fprc_config() {
-  # get random string
-  uniq=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1 || true)
-  # replace all characters except a-z, A-Z, 0-9, - with -
-  proxy_name=$(echo -n "${hostname}" | tr -c 'a-zA-Z0-9-' '-')-$uniq
+  if [[ -z "$tunnel_name" ]]; then
+    # get random string
+    uniq=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1 || true)
+    # replace all characters except a-z, A-Z, 0-9, - with -
+    proxy_name=$(echo -n "${hostname}" | tr -c 'a-zA-Z0-9-' '-')-$uniq
+  else
+    proxy_name=$tunnel_name
+  fi
 
     # Write configuration to frpc.toml
     cat > frpc.toml <<EOF
@@ -92,6 +119,8 @@ localPort = ${local_port}
 subdomain = "${proxy_name}"
 hostHeaderRewrite = "${hostname}"
 requestHeaders.set.x-forwarded-host = "${hostname}"
+transport.useEncryption = true
+transport.useCompression = true
 EOF
 
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
@@ -100,20 +129,8 @@ EOF
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 }
 
-# Show help if no arguments provided
-if [[ $# -eq 0 ]]; then
-    echo "Usage: ./frp.sh hostname:port [auth_token]"
-    echo "  hostname - your private website hostname"
-    echo "  port - your private website port, you can skip it if it's 80"
-    echo "  auth_token - your authentication token, you can skip it if you already have frpc.toml"
-    echo "Options:"
-    echo "  --help    Show this help message"
-    exit 1
-fi
-
 ensure_frpc
 
-auth_token=${2:-}
 if [[ -z "$auth_token" ]]; then
   if [[ -f "frpc.toml" ]]; then
     # Fetch current auth token from frpc.toml
@@ -126,11 +143,10 @@ if [[ -z "$auth_token" ]]; then
 fi
 
 # Parse hostname and port
-hostname_port=$1
-if [[ $hostname_port == *":"* ]]; then
-  IFS=":" read -r hostname local_port <<< "$hostname_port"
+if [[ $local_hostname == *":"* ]]; then
+  IFS=":" read -r hostname local_port <<< "$local_hostname"
 else
-  hostname=$hostname_port
+  hostname=$local_hostname
   local_port=80
 fi
 
