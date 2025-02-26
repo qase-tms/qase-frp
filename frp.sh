@@ -15,7 +15,7 @@ print_usage() {
   echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-h]"
   echo "Options:"
   echo "  -h  Show this help message and exit"
-  echo "  -l  Local hostname and port to tunnel (e.g. private.website.dev:8080)"
+  echo "  -l  Local hostname and port to tunnel (e.g. private.website.local:8080)"
   echo "  -a  Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
   echo "  -t  Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
   exit 1
