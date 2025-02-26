@@ -24,7 +24,7 @@ You can also specify -t option to specify tunnel name. It should be unique. If y
 2. Create a config file `frpc.toml` in any suitable directory
 
     ```toml
-    serverAddr = "frps.qase.dev"
+    serverAddr = "frps.qase.io"
     serverPort = 7002
     auth.method = "token"
     auth.token = "${auth_token}"
