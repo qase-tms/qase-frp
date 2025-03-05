@@ -104,8 +104,7 @@ write_fprc_config() {
     cat > frpc.toml <<EOF
 serverAddr = "${FRP_SERVER}"
 serverPort = 7002
-auth.method = "token"
-auth.token = "${auth_token}"
+metadatas.token = "${auth_token}"
 transport.poolCount = 50
 transport.protocol = "quic"
 udpPacketSize = 1500
@@ -134,7 +133,7 @@ ensure_frpc
 if [[ -z "$auth_token" ]]; then
   if [[ -f "frpc.toml" ]]; then
     # Fetch current auth token from frpc.toml
-    auth_token=$(grep 'auth.token' frpc.toml | sed -E 's/.*auth\.token *= *"([^"]+)".*/\1/')
+    auth_token=$(grep 'metadatas.token' frpc.toml | sed -E 's/.*auth\.token *= *"([^"]+)".*/\1/')
   else
     if [[ -z "$auth_token" ]]; then
       read -p "Enter your authentication token: " auth_token
