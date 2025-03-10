@@ -36,9 +36,14 @@ To specify a custom tunnel name (should be unique), use the -t option:
 
 If omitted, the script will generate a random name.
 
-### Step 4: Obtain Public URL
+### Step 4: Obtain FRP URL
 
-After execution, the script will output a URL. Save this URL—it will be used for cloud testing in Qase.
+After the launch, the script outputs a URL, like `http://${project_name}.srv.frps.qase.dev`. 
+
+**Important:**
+- This URL could be opened only within the Qase internal network and will 
+not work locally. It is specifically required for the cloud test generator and runner in Qase.
+- The link is valid only while the script is running. If the script is stopped, the link will become invalid.
 
 ### Step 5: Configure Environment in Qase
 
@@ -49,7 +54,7 @@ After execution, the script will output a URL. Save this URL—it will be used f
 **Important:**
 When creating test cases, if you use a URL such as `ourhost.com` within a test step, Qase automatically replaces it 
 with the URL specified in the environment's **Host** variable. Ensure you set the environment **Host** variable to 
-the FRP-generated URL (like `http://${project_name}.srv.frps.qase.dev`) to direct tests appropriately.
+the FRP-generated URL to direct tests appropriately.
 
 ### Step 6: Run Cloud Tests
 
