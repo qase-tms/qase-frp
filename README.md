@@ -1,5 +1,8 @@
 # qase-frp
+
 This repository contains a script that allows you to create a tunnel to your private website for cloud testing in Qase. It uses the FRP client to create a tunnel to your private website. The script creates a configuration file for the FRP client and runs it. The script is written in bash and can be run on any platform that supports bash.
+
+> **Windows Users**: For Windows-specific instructions, please see the [Windows README](README_WINDOWS.md).
 
 ## Step-by-step Guide to Setting Up Qase FRP Tunnel
 
