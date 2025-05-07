@@ -77,16 +77,16 @@ function Get-LatestFrpcUrl {
 
 # Function to ensure frpc binary is downloaded
 function Ensure-Frpc {
-    # Check if frpc.exe exists locally, or in the windows folder
+    # Check if frpc.exe exists locally, or in the script folder
     if (Test-Path "frpc.exe") {
         Write-Host "Using existing frpc.exe in current directory"
         return
     }
     
-    $windows_frpc = Join-Path (Get-Location).Path "windows\frpc.exe"
-    if (Test-Path $windows_frpc) {
-        Write-Host "Using existing frpc.exe from windows folder"
-        Copy-Item -Path $windows_frpc -Destination "frpc.exe" -Force
+    $script_frpc = Join-Path (Get-Location).Path "script\frpc.exe"
+    if (Test-Path $script_frpc) {
+        Write-Host "Using existing frpc.exe from script folder"
+        Copy-Item -Path $script_frpc -Destination "frpc.exe" -Force
         return
     }
 
