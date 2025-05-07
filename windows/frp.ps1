@@ -1,3 +1,10 @@
+param(
+    [Parameter(Mandatory=$false)][string]$LocalHostname,
+    [Parameter(Mandatory=$false)][string]$AuthToken,
+    [Parameter(Mandatory=$false)][string]$TunnelName,
+    [Parameter(Mandatory=$false)][switch]$Help
+)
+
 # FRP tunnel setup script for Windows
 # PowerShell equivalent of frp.sh
 
@@ -21,14 +28,6 @@ function Print-Usage {
     Write-Host "  -TunnelName      Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
     exit 1
 }
-
-# Parse command line arguments
-param(
-    [Parameter(Mandatory=$false)][string]$LocalHostname,
-    [Parameter(Mandatory=$false)][string]$AuthToken,
-    [Parameter(Mandatory=$false)][string]$TunnelName,
-    [Parameter(Mandatory=$false)][switch]$Help
-)
 
 if ($Help) {
     Print-Usage
@@ -78,35 +77,96 @@ function Get-LatestFrpcUrl {
 
 # Function to ensure frpc binary is downloaded
 function Ensure-Frpc {
-    # Check if frpc.exe exists and download it if not
-    if (-not (Test-Path "frpc.exe")) {
-        Write-Host "frpc binary not found. Downloading the latest release..."
+    # Check if frpc.exe exists locally, or in the windows folder
+    if (Test-Path "frpc.exe") {
+        Write-Host "Using existing frpc.exe in current directory"
+        return
+    }
+    
+    $windows_frpc = Join-Path (Get-Location).Path "windows\frpc.exe"
+    if (Test-Path $windows_frpc) {
+        Write-Host "Using existing frpc.exe from windows folder"
+        Copy-Item -Path $windows_frpc -Destination "frpc.exe" -Force
+        return
+    }
 
-        # Fetch latest frp URL
-        $release_url = Get-LatestFrpcUrl
-        Write-Host "Downloading frpc from: $release_url"
+    Write-Host "frpc binary not found. Downloading the latest release..."
 
+    # Fetch latest frp URL
+    $release_url = Get-LatestFrpcUrl
+    Write-Host "Downloading frpc from: $release_url"
+
+    try {
         # Create a temporary directory
         $temp_dir = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
         New-Item -ItemType Directory -Path $temp_dir -Force | Out-Null
         
         # Download and extract the frpc binary
         $zip_file = "$temp_dir\frp.zip"
-        Invoke-WebRequest -Uri $release_url -OutFile $zip_file
+        Write-Host "Downloading to: $zip_file"
         
-        # Extract the ZIP file
-        Expand-Archive -Path $zip_file -DestinationPath $temp_dir
+        # Use TLS 1.2 to avoid security issues
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $release_url -OutFile $zip_file -UseBasicParsing
+        
+        if (-not (Test-Path $zip_file)) {
+            throw "Failed to download the zip file to $zip_file"
+        }
+        
+        Write-Host "Download complete. Extracting..."
+        
+        # Try alternative extraction method to avoid antivirus issues
+        try {
+            # Try extraction method 1: .NET ZipFile
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($zip_file, $temp_dir)
+        } catch {
+            Write-Host "First extraction method failed, trying alternative method..."
+            
+            try {
+                # Try extraction method 2: external command
+                $shell = New-Object -ComObject Shell.Application
+                $zip = $shell.NameSpace($zip_file)
+                $destination = $shell.NameSpace($temp_dir)
+                $destination.CopyHere($zip.Items())
+            } catch {
+                Write-Host "Second extraction method failed. Trying final method..."
+                
+                # Try extraction method 3: PowerShell command with -Force
+                Expand-Archive -Path $zip_file -DestinationPath $temp_dir -Force
+            }
+        }
         
         # Find the frpc.exe in the extracted directory
-        $frpc_path = Get-ChildItem -Path $temp_dir -Recurse -Filter "frpc.exe" | Select-Object -First 1 -ExpandProperty FullName
+        $frpc_files = Get-ChildItem -Path $temp_dir -Recurse -Filter "frpc.exe" -ErrorAction SilentlyContinue
         
-        # Copy frpc.exe to the current directory
-        Copy-Item -Path $frpc_path -Destination "frpc.exe"
-        
+        if ($frpc_files -and $frpc_files.Count -gt 0) {
+            $frpc_path = $frpc_files[0].FullName
+            if (Test-Path $frpc_path) {
+                # Copy frpc.exe to the current directory
+                Copy-Item -Path $frpc_path -Destination "frpc.exe" -Force
+                Write-Host "frpc downloaded and ready to use!"
+            } else {
+                throw "frpc.exe was found but the path is not valid: $frpc_path"
+            }
+        } else {
+            throw "Could not find frpc.exe in the extracted files"
+        }
+    } catch {
+        Write-Host "Error: Failed to download or extract frpc. $_"
+        Write-Host ""
+        Write-Host "This could be due to your antivirus or Windows Defender blocking the file."
+        Write-Host "Please consider the following options:"
+        Write-Host "1. Temporarily disable your antivirus and try again"
+        Write-Host "2. Add an exception for frpc.exe in your antivirus settings"
+        Write-Host "3. Download frpc manually from https://github.com/fatedier/frp/releases"
+        Write-Host "   and place it in the same directory as this script"
+        exit 1
+    } finally {
         # Clean up
-        Remove-Item -Path $temp_dir -Recurse -Force
-        
-        Write-Host "frpc downloaded and ready to use!"
+        if (Test-Path $temp_dir) {
+            Remove-Item -Path $temp_dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -184,8 +244,12 @@ if ($local_hostname -match '(.+):(\d+)') {
     $local_port = 80
 }
 
+# Handle localhost explicitly to avoid IPv6 issues
+if ($hostname -eq "localhost") {
+    $local_ip = "127.0.0.1"
+}
 # Check if hostname is an IP address
-if ($hostname -match '^\d+\.\d+\.\d+\.\d+$') {
+elseif ($hostname -match '^\d+\.\d+\.\d+\.\d+$') {
     $local_ip = $hostname
 } else {
     # Try to resolve the hostname
@@ -195,7 +259,13 @@ if ($hostname -match '^\d+\.\d+\.\d+\.\d+$') {
             throw "No IP address found"
         }
         if ($local_ip -is [array]) {
-            $local_ip = $local_ip[0]
+            # Prefer IPv4 over IPv6
+            $ipv4 = $local_ip | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
+            if ($ipv4) {
+                $local_ip = $ipv4
+            } else {
+                $local_ip = $local_ip[0]
+            }
         }
     } catch {
         # Try to get the IP from the hosts file
@@ -222,4 +292,4 @@ Write-FrpcConfig -hostname $hostname -local_ip $local_ip -local_port $local_port
 
 # Run frpc
 Write-Host "Starting frpc with frpc.toml... Press Ctrl+C to stop."
-& .\frpc.exe -c frpc.toml 
+& .\frpc.exe -c frpc.toml
