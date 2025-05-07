@@ -43,7 +43,7 @@ If omitted, the script will generate a random name.
 
 ### Step 4: Obtain FRP URL
 
-After the launch, the script outputs a URL, like `http://${project_name}.srv.frps.qase.dev`. 
+After the launch, the script outputs a URL, like `http://${project_name}.srv.frps.qase.dev`.
 
 **Important:**
 
