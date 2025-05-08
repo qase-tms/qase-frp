@@ -25,7 +25,7 @@
     ```
 
 3. Replace values:
-   - `${auth_token}` - auth token, Qase’s support can provide a token. In the future, you will be able to specify your Qase API token here
+   - `${auth_token}` - authentication token generated at the [Qase Personal Settings page](https://app.qase.io/user/api/token)
    - `${project_name}` - project name, it should be unique.
      you can generate something unique with the command `cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1`
    - `${local_ip}` - local IP of your private website. You can get it with `ping` command
