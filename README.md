@@ -32,18 +32,23 @@ Replace:
 - `private.website.local:80` with your local website's domain and port.
 - `your_auth_token` with the token you generated in Step 2.
 
-Optional:
-To specify a custom tunnel name (should be unique), use the -t option:
+Optional parameters:
 
+- To specify a custom tunnel name (should be unique), use the -t option:
 ```shell
 ./frp.sh -l private.website.local:80 -a "your_auth_token" -t custom_tunnel_name
 ```
 
-If omitted, the script will generate a random name.
+- If you experience connection timeouts, use the -c flag to switch from QUIC to TCP protocol:
+```shell
+./frp.sh -l private.website.local:80 -a "your_auth_token" -c
+```
+
+If tunnel name is omitted, the script will generate a random name.
 
 ### Step 4: Obtain FRP URL
 
-After the launch, the script outputs a URL, like `http://${project_name}.srv.frps.qase.dev`.
+After the launch, the script outputs a URL, like `http://${project_name}.qase.frp`.
 
 **Important:**
 

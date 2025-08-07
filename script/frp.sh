@@ -10,22 +10,25 @@ TUNNEL_HOST_SUFFIX="${TUNNEL_HOST_SUFFIX:-qase.frp}"
 local_hostname=''
 tunnel_name=''
 auth_token=''
+use_tcp=false
 
 print_usage() {
-  echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-h]"
+  echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-c] [-h]"
   echo "Options:"
   echo "  -h  Show this help message and exit"
   echo "  -l  Local hostname and port to tunnel (e.g. private.website.local:8080)"
   echo "  -a  Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
   echo "  -t  Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
+  echo "  -c  Use TCP protocol instead of QUIC"
   exit 1
 }
 
-while getopts 'l:a:t:h' flag; do
+while getopts 'l:a:t:ch' flag; do
   case "${flag}" in
     l) local_hostname="${OPTARG}" ;;
     a) auth_token="${OPTARG}" ;;
     t) tunnel_name="${OPTARG}" ;;
+    c) use_tcp=true ;;
     *) print_usage ;;
   esac
 done
@@ -101,12 +104,19 @@ write_fprc_config() {
   fi
 
     # Write configuration to frpc.toml
+    protocol="quic"
+    server_port=7002
+    if [[ "$use_tcp" == true ]]; then
+        protocol="tcp"
+        server_port=7000
+    fi
+    
     cat > frpc.toml <<EOF
 serverAddr = "${FRP_SERVER}"
-serverPort = 7002
+serverPort = ${server_port}
 metadatas.token = "${auth_token}"
 transport.poolCount = 50
-transport.protocol = "quic"
+transport.protocol = "${protocol}"
 udpPacketSize = 1500
 transport.tls.enable = false
 
