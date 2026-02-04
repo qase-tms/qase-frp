@@ -11,24 +11,27 @@ local_hostname=''
 tunnel_name=''
 auth_token=''
 use_tcp=false
+use_https=false
 
 print_usage() {
-  echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-c] [-h]"
+  echo "Usage: $0 -l local_hostname[:local_port] [-a auth_token] [-t tunnel_name] [-c] [-s] [-h]"
   echo "Options:"
   echo "  -h  Show this help message and exit"
   echo "  -l  Local hostname and port to tunnel (e.g. private.website.local:8080)"
   echo "  -a  Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
   echo "  -t  Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
   echo "  -c  Use TCP protocol instead of QUIC"
+  echo "  -s  Connect to backend using HTTPS (auto-detected for port 443)"
   exit 1
 }
 
-while getopts 'l:a:t:ch' flag; do
+while getopts 'l:a:t:csh' flag; do
   case "${flag}" in
     l) local_hostname="${OPTARG}" ;;
     a) auth_token="${OPTARG}" ;;
     t) tunnel_name="${OPTARG}" ;;
     c) use_tcp=true ;;
+    s) use_https=true ;;
     *) print_usage ;;
   esac
 done
@@ -110,8 +113,33 @@ write_fprc_config() {
         protocol="tcp"
         server_port=7000
     fi
-    
-    cat > frpc.toml <<EOF
+
+    # Determine if we need http2https plugin (for HTTPS backends)
+    if [[ "$local_port" -eq 443 ]] || [[ "$use_https" == true ]]; then
+        cat > frpc.toml <<EOF
+serverAddr = "${FRP_SERVER}"
+serverPort = ${server_port}
+metadatas.token = "${auth_token}"
+transport.poolCount = 50
+transport.protocol = "${protocol}"
+udpPacketSize = 1500
+transport.tls.enable = false
+
+[[proxies]]
+name = "${proxy_name}"
+type = "http"
+subdomain = "${proxy_name}"
+transport.useEncryption = true
+transport.useCompression = true
+
+[proxies.plugin]
+type = "http2https"
+localAddr = "${local_ip}:${local_port}"
+hostHeaderRewrite = "${hostname}"
+requestHeaders.set.x-forwarded-host = "${hostname}"
+EOF
+    else
+        cat > frpc.toml <<EOF
 serverAddr = "${FRP_SERVER}"
 serverPort = ${server_port}
 metadatas.token = "${auth_token}"
@@ -131,6 +159,7 @@ requestHeaders.set.x-forwarded-host = "${hostname}"
 transport.useEncryption = true
 transport.useCompression = true
 EOF
+    fi
 
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
     echo "Please, specify the following URL in your Environment for Cloud Test Run: "

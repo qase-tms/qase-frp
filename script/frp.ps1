@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$false)][string]$AuthToken,
     [Parameter(Mandatory=$false)][string]$TunnelName,
     [Parameter(Mandatory=$false)][switch]$UseTcp,
+    [Parameter(Mandatory=$false)][switch]$UseHttps,
     [Parameter(Mandatory=$false)][switch]$Help
 )
 
@@ -22,12 +23,13 @@ $tunnel_name = ""
 $auth_token = ""
 
 function Print-Usage {
-    Write-Host "Usage: .\frp.ps1 -LocalHostname local_hostname[:local_port] [-AuthToken auth_token] [-TunnelName tunnel_name] [-UseTcp]"
+    Write-Host "Usage: .\frp.ps1 -LocalHostname local_hostname[:local_port] [-AuthToken auth_token] [-TunnelName tunnel_name] [-UseTcp] [-UseHttps]"
     Write-Host "Options:"
     Write-Host "  -LocalHostname   Local hostname and port to tunnel (e.g. private.website.local:8080)"
     Write-Host "  -AuthToken       Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
     Write-Host "  -TunnelName      Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
     Write-Host "  -UseTcp          Use TCP protocol instead of QUIC"
+    Write-Host "  -UseHttps        Connect to backend using HTTPS (auto-detected for port 443)"
     exit 1
 }
 
@@ -194,7 +196,34 @@ function Write-FrpcConfig {
     $protocol = if ($UseTcp) { "tcp" } else { "quic" }
     $serverPort = if ($UseTcp) { 7000 } else { 7002 }
     
-    $config = @"
+    # Determine if we need http2https plugin (for HTTPS backends)
+    $useHttpsBackend = ($local_port -eq 443) -or $UseHttps
+
+    if ($useHttpsBackend) {
+        $config = @"
+serverAddr = "$FRP_SERVER"
+serverPort = $serverPort
+metadatas.token = "$auth_token"
+transport.poolCount = 50
+transport.protocol = "$protocol"
+udpPacketSize = 1500
+transport.tls.enable = false
+
+[[proxies]]
+name = "$proxy_name"
+type = "http"
+subdomain = "$proxy_name"
+transport.useEncryption = true
+transport.useCompression = true
+
+[proxies.plugin]
+type = "http2https"
+localAddr = "${local_ip}:${local_port}"
+hostHeaderRewrite = "$hostname"
+requestHeaders.set.x-forwarded-host = "$hostname"
+"@
+    } else {
+        $config = @"
 serverAddr = "$FRP_SERVER"
 serverPort = $serverPort
 metadatas.token = "$auth_token"
@@ -214,6 +243,7 @@ requestHeaders.set.x-forwarded-host = "$hostname"
 transport.useEncryption = true
 transport.useCompression = true
 "@
+    }
 
     Set-Content -Path "frpc.toml" -Value $config
 
