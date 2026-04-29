@@ -192,8 +192,10 @@ function Invoke-FrpcDiagnostics {
     $ErrorActionPreference = 'Continue'
 
     $logFile = "frp-diagnose-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-    try { Start-Transcript -Path $logFile -Force | Out-Null } catch { }
+    $transcriptStarted = $false
+    try { Start-Transcript -Path $logFile -Force | Out-Null; $transcriptStarted = $true } catch { }
 
+    try {
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host "FRP backend connectivity diagnostic" -ForegroundColor Cyan
@@ -395,13 +397,16 @@ function Invoke-FrpcDiagnostics {
     Write-Host "    not on the working laptop            or have IT bypass proxy for it."
     Write-Host ""
 
-    try { Stop-Transcript | Out-Null } catch { }
-    if (Test-Path $logFile) {
-        Write-Host "Diagnostic log saved to: $((Get-Item $logFile).FullName)" -ForegroundColor Green
+    } finally {
+        if ($transcriptStarted) {
+            try { Stop-Transcript | Out-Null } catch { }
+        }
+        if (Test-Path $logFile) {
+            Write-Host "Diagnostic log saved to: $((Get-Item $logFile).FullName)" -ForegroundColor Green
+        }
+        Write-Host ""
+        $ErrorActionPreference = $prevEAP
     }
-    Write-Host ""
-
-    $ErrorActionPreference = $prevEAP
 }
 
 # Function to write the frpc configuration
