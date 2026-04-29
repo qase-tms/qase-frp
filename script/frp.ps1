@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory=$false)][string]$TunnelName,
     [Parameter(Mandatory=$false)][switch]$UseTcp,
     [Parameter(Mandatory=$false)][switch]$UseHttps,
+    [Parameter(Mandatory=$false)][switch]$RunDiagnose,
     [Parameter(Mandatory=$false)][switch]$Help
 )
 
@@ -23,13 +24,14 @@ $tunnel_name = ""
 $auth_token = ""
 
 function Print-Usage {
-    Write-Host "Usage: .\frp.ps1 -LocalHostname local_hostname[:local_port] [-AuthToken auth_token] [-TunnelName tunnel_name] [-UseTcp] [-UseHttps]"
+    Write-Host "Usage: .\frp.ps1 -LocalHostname local_hostname[:local_port] [-AuthToken auth_token] [-TunnelName tunnel_name] [-UseTcp] [-UseHttps] [-RunDiagnose]"
     Write-Host "Options:"
     Write-Host "  -LocalHostname   Local hostname and port to tunnel (e.g. private.website.local:8080)"
     Write-Host "  -AuthToken       Authentication token for frp server. If not provided, it will be taken from frpc.toml or asked interactively."
     Write-Host "  -TunnelName      Tunnel name to use for the hostname (default: random). It will be a part of the environment URL for Qase and it should be unique."
     Write-Host "  -UseTcp          Use TCP protocol instead of QUIC"
     Write-Host "  -UseHttps        Connect to backend using HTTPS (auto-detected for port 443)"
+    Write-Host "  -RunDiagnose     Run pre-flight connectivity diagnostics and save a log file (default: off). Use this when frpc fails to forward traffic."
     exit 1
 }
 
@@ -172,6 +174,226 @@ function Ensure-Frpc {
             Remove-Item -Path $temp_dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+# Connectivity diagnostic: runs before frpc starts so support has data when something fails.
+# Each section explains WHAT it tests and HOW to interpret the result.
+function Invoke-FrpcDiagnostics {
+    param(
+        [string]$TargetHost,
+        [int]$TargetPort,
+        [string]$TargetIp
+    )
+
+    $logFile = "frp-diagnose-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+    try { Start-Transcript -Path $logFile -Force | Out-Null } catch { }
+
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "FRP backend connectivity diagnostic" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "Target:   ${TargetHost}:${TargetPort} (resolved -> $TargetIp)"
+    Write-Host "Host:     $env:COMPUTERNAME"
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        Write-Host "OS:       $($os.Caption) ($($os.Version))"
+        Write-Host "ProductType: $($os.ProductType)  (1=Workstation, 2=DC, 3=Server)"
+    } catch { Write-Host "OS:       (unavailable)" }
+    Write-Host "Date:     $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    Write-Host ""
+    Write-Host "Each section below explains WHAT it tests and HOW to read the result." -ForegroundColor DarkGray
+    Write-Host "If frpc fails to forward traffic, send the saved log to support." -ForegroundColor DarkGray
+
+    # ---- 1. Source IP & route -----------------------------------------------
+    Write-Host ""
+    Write-Host "[1/7] Source IP and route to target" -ForegroundColor Cyan
+    Write-Host "  Why: shows which local IP and gateway this machine uses to reach the" -ForegroundColor DarkGray
+    Write-Host "       backend. Compare with the working machine - a different source IP" -ForegroundColor DarkGray
+    Write-Host "       often means a different firewall rule applies." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Local IPv4 addresses:"
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.InterfaceAlias -notmatch "Loopback|Pseudo" } |
+        Select-Object IPAddress, InterfaceAlias, PrefixLength |
+        Format-Table -AutoSize | Out-String | Write-Host
+    Write-Host "Route to ${TargetIp}:"
+    try {
+        Find-NetRoute -RemoteIPAddress $TargetIp -ErrorAction Stop |
+            Select-Object IPAddress, InterfaceAlias, NextHop, RouteMetric |
+            Format-Table -AutoSize | Out-String | Write-Host
+    } catch {
+        Write-Host "  Find-NetRoute failed: $_" -ForegroundColor Red
+    }
+
+    # ---- 2. DNS configuration -----------------------------------------------
+    Write-Host "[2/7] DNS configuration" -ForegroundColor Cyan
+    Write-Host "  Why: if two machines use different DNS servers, they may resolve the" -ForegroundColor DarkGray
+    Write-Host "       same hostname to different IPs and end up talking to different" -ForegroundColor DarkGray
+    Write-Host "       backends. Compare resolution and DNS servers across machines." -ForegroundColor DarkGray
+    Write-Host ""
+    try {
+        Resolve-DnsName -Name $TargetHost -ErrorAction Stop |
+            Format-Table -AutoSize | Out-String | Write-Host
+    } catch {
+        Write-Host "  Resolve-DnsName failed: $_" -ForegroundColor Red
+    }
+    Write-Host "Configured DNS servers:"
+    Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object ServerAddresses |
+        Select-Object InterfaceAlias, ServerAddresses |
+        Format-Table -AutoSize | Out-String | Write-Host
+    Write-Host "Hosts file entries for ${TargetHost}:"
+    $hostsFile = "$env:windir\System32\drivers\etc\hosts"
+    $hostsMatch = Get-Content $hostsFile -ErrorAction SilentlyContinue | Select-String -Pattern ([regex]::Escape($TargetHost))
+    if ($hostsMatch) { $hostsMatch | ForEach-Object { Write-Host "  $($_.Line)" -ForegroundColor Yellow } }
+    else { Write-Host "  (no entries)" }
+
+    # ---- 3. TCP reachability ------------------------------------------------
+    Write-Host ""
+    Write-Host "[3/7] TCP reachability ${TargetIp}:${TargetPort}" -ForegroundColor Cyan
+    Write-Host "  Why: pure layer-4 test. If TCP cannot establish, no firewall rule allows" -ForegroundColor DarkGray
+    Write-Host "       this server to talk to the backend on this port. If TCP succeeds but" -ForegroundColor DarkGray
+    Write-Host "       later layers fail, the issue is above TCP (TLS, EDR, proxy)." -ForegroundColor DarkGray
+    Write-Host ""
+    try {
+        $tcpResult = Test-NetConnection -ComputerName $TargetIp -Port $TargetPort -WarningAction SilentlyContinue
+        $tcpResult | Format-List | Out-String | Write-Host
+        if ($tcpResult.TcpTestSucceeded) {
+            Write-Host "  RESULT: TCP $TargetPort open" -ForegroundColor Green
+        } else {
+            Write-Host "  RESULT: TCP $TargetPort UNREACHABLE - likely firewall/route" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  Test-NetConnection failed: $_" -ForegroundColor Red
+    }
+
+    # ---- 4. Plain HTTPS via curl --------------------------------------------
+    Write-Host ""
+    Write-Host "[4/7] Plain HTTPS request via curl.exe (decisive test)" -ForegroundColor Cyan
+    Write-Host "  Why: bypasses frpc entirely. This is the decisive test." -ForegroundColor DarkGray
+    Write-Host "       - curl works -> network path is fine, issue is frpc-specific" -ForegroundColor DarkGray
+    Write-Host "       - curl fails with same 'connection forcibly closed' as frpc" -ForegroundColor DarkGray
+    Write-Host "         -> NOT an FRP bug. Network/security stack between this server" -ForegroundColor DarkGray
+    Write-Host "            and the backend is RST-ing TLS sessions. Look at step 6/7." -ForegroundColor DarkGray
+    Write-Host ""
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd) {
+        & curl.exe -v --max-time 10 -o NUL "https://${TargetHost}:${TargetPort}/" 2>&1 |
+            ForEach-Object { Write-Host "  $_" }
+    } else {
+        Write-Host "  curl.exe not present (Windows pre-1803). Falling back to Invoke-WebRequest." -ForegroundColor Yellow
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $r = Invoke-WebRequest -Uri "https://${TargetHost}:${TargetPort}/" -UseBasicParsing -TimeoutSec 10
+            Write-Host "  HTTP $($r.StatusCode) ($($r.RawContentLength) bytes)" -ForegroundColor Green
+        } catch {
+            Write-Host "  FAIL: $_" -ForegroundColor Red
+        }
+    }
+
+    # ---- 5. Raw TLS handshake -----------------------------------------------
+    Write-Host ""
+    Write-Host "[5/7] Raw TLS handshake (no HTTP layer)" -ForegroundColor Cyan
+    Write-Host "  Why: tests if TLS itself completes. If TCP works (step 3) but TLS fails" -ForegroundColor DarkGray
+    Write-Host "       here, the issue is at the TLS layer: missing root CA, cipher" -ForegroundColor DarkGray
+    Write-Host "       mismatch, or a TLS-inspecting middlebox MITM-ing the connection." -ForegroundColor DarkGray
+    Write-Host ""
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect($TargetIp, $TargetPort)
+        $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { param($s,$cert,$chain,$errors) $true })
+        $ssl.AuthenticateAsClient($TargetHost)
+        Write-Host "  TLS handshake OK" -ForegroundColor Green
+        Write-Host "  Protocol: $($ssl.SslProtocol)"
+        Write-Host "  Cipher:   $($ssl.CipherAlgorithm) ($($ssl.CipherStrength) bits)"
+        if ($ssl.RemoteCertificate) {
+            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $ssl.RemoteCertificate
+            Write-Host "  Subject:  $($cert.Subject)"
+            Write-Host "  Issuer:   $($cert.Issuer)"
+            Write-Host "  Valid:    $($cert.NotBefore) -> $($cert.NotAfter)"
+        }
+        $ssl.Close(); $tcp.Close()
+    } catch {
+        Write-Host "  TLS handshake FAIL: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.InnerException) {
+            Write-Host "  Inner: $($_.Exception.InnerException.Message)" -ForegroundColor Red
+        }
+    }
+
+    # ---- 6. Security software / NDIS filters -------------------------------
+    Write-Host ""
+    Write-Host "[6/7] Security software that can intercept TLS" -ForegroundColor Cyan
+    Write-Host "  Why: enterprise EDR/AV often MITM outbound HTTPS. They allow signed" -ForegroundColor DarkGray
+    Write-Host "       apps (curl, browsers) but RST connections from unknown processes" -ForegroundColor DarkGray
+    Write-Host "       like frpc.exe. If listed software differs from the working machine," -ForegroundColor DarkGray
+    Write-Host "       that delta is a strong suspect." -ForegroundColor DarkGray
+    Write-Host ""
+    $secPattern = "defender|symantec|crowdstrike|mcafee|trellix|sophos|sentinel|zscaler|netskope|cisco|kaspersky|eset|bitdefender|cylance|carbon|tanium|fortinet|paloalto|avast|avg|f-secure|fsecure|forcepoint|webroot"
+    $svc = Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Running" -and $_.DisplayName -match $secPattern }
+    if ($svc) {
+        $svc | Select-Object Name, DisplayName | Format-Table -AutoSize | Out-String | Write-Host
+    } else {
+        Write-Host "  No common security agents detected by name." -ForegroundColor Yellow
+        Write-Host "  (Custom-branded agents may still be present - confirm with IT.)" -ForegroundColor DarkGray
+    }
+    Write-Host "Network adapter filter drivers (NDIS, non-Microsoft):"
+    Get-NetAdapterBinding -ErrorAction SilentlyContinue |
+        Where-Object { $_.Enabled -and $_.ComponentID -notmatch "ms_(tcpip|tcpip6|netbt|server|msclient|lltdio|rspndr|implat|bridge|ndiscap|pacer)" } |
+        Select-Object Name, DisplayName, ComponentID |
+        Format-Table -AutoSize | Out-String | Write-Host
+
+    # ---- 7. System proxy ----------------------------------------------------
+    Write-Host "[7/7] System proxy configuration" -ForegroundColor Cyan
+    Write-Host "  Why: frpc inherits Go's proxy lookup, which respects HTTP_PROXY /" -ForegroundColor DarkGray
+    Write-Host "       HTTPS_PROXY env vars. A corporate proxy may break TLS to internal" -ForegroundColor DarkGray
+    Write-Host "       hosts. The working laptop may bypass proxy for internal sites; the" -ForegroundColor DarkGray
+    Write-Host "       server may not." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "WinHTTP proxy:"
+    netsh winhttp show proxy
+    Write-Host ""
+    Write-Host "Environment proxy variables:"
+    foreach ($var in @("HTTP_PROXY","HTTPS_PROXY","NO_PROXY","http_proxy","https_proxy","no_proxy")) {
+        $v = [Environment]::GetEnvironmentVariable($var)
+        if ($v) { Write-Host "  $var = $v" -ForegroundColor Yellow }
+        else    { Write-Host "  $var = (unset)" }
+    }
+    Write-Host ""
+    Write-Host "WinINET / IE proxy (HKCU):"
+    $ie = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
+    if ($ie) {
+        Write-Host "  ProxyEnable:   $($ie.ProxyEnable)"
+        Write-Host "  ProxyServer:   $($ie.ProxyServer)"
+        Write-Host "  ProxyOverride: $($ie.ProxyOverride)"
+        Write-Host "  AutoConfigURL: $($ie.AutoConfigURL)"
+    }
+
+    # ---- Interpretation guide ----------------------------------------------
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "How to read these results" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "  Step 3 FAIL                         -> Network firewall blocks the route."
+    Write-Host "                                         Hand to network team."
+    Write-Host "  Step 3 OK + step 4 FAIL with same   -> NOT an FRP bug. Something between"
+    Write-Host "    'connection reset' as frpc           this host and the backend RSTs TLS."
+    Write-Host "                                         Look at step 6 (EDR/AV) and step 7"
+    Write-Host "                                         (proxy)."
+    Write-Host "  Steps 3-5 OK, frpc still fails      -> frpc-specific. Capture pktmon and"
+    Write-Host "                                         compare frpc TLS ClientHello vs curl."
+    Write-Host "  Step 5 cert error                   -> Internal CA missing from this"
+    Write-Host "                                         server's trust store."
+    Write-Host "  Step 6 lists software the working   -> That delta is the likely cause."
+    Write-Host "    laptop does NOT run                  Add frpc.exe exception in the EDR/AV."
+    Write-Host "  Step 7 shows a proxy on server but  -> Set NO_PROXY for the backend host,"
+    Write-Host "    not on the working laptop            or have IT bypass proxy for it."
+    Write-Host ""
+
+    try { Stop-Transcript | Out-Null } catch { }
+    if (Test-Path $logFile) {
+        Write-Host "Diagnostic log saved to: $((Get-Item $logFile).FullName)" -ForegroundColor Green
+    }
+    Write-Host ""
 }
 
 # Function to write the frpc configuration
@@ -319,6 +541,15 @@ elseif ($hostname -match '^\d+\.\d+\.\d+\.\d+$') {
             Write-Host "Error: Could not resolve the IP address of the hostname: $hostname"
             exit 1
         }
+    }
+}
+
+# Run pre-flight diagnostics on demand so support has data when frpc fails.
+if ($RunDiagnose) {
+    try {
+        Invoke-FrpcDiagnostics -TargetHost $hostname -TargetPort $local_port -TargetIp $local_ip
+    } catch {
+        Write-Host "Diagnostic step failed (continuing with frpc): $_" -ForegroundColor Yellow
     }
 }
 
