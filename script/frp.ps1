@@ -286,7 +286,10 @@ function Invoke-FrpcDiagnostics {
     Write-Host ""
     $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curlCmd) {
+        # Filter PowerShell's RemoteException type-name lines that leak when stringifying
+        # ErrorRecord-wrapped stderr from native commands.
         & curl.exe -v --max-time 10 -o NUL "https://${TargetHost}:${TargetPort}/" 2>&1 |
+            Where-Object { $_ -notmatch '^System\.Management\.Automation\.' } |
             ForEach-Object { Write-Host "  $_" }
     } else {
         Write-Host "  curl.exe not present (Windows pre-1803). Falling back to Invoke-WebRequest." -ForegroundColor Yellow
