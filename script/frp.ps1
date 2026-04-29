@@ -185,6 +185,12 @@ function Invoke-FrpcDiagnostics {
         [string]$TargetIp
     )
 
+    # Native commands (curl.exe) emit stderr lines that PowerShell wraps as ErrorRecord;
+    # with EAP=Stop the first one aborts the function. Switch to Continue locally so all
+    # sections run, then restore.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
     $logFile = "frp-diagnose-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
     try { Start-Transcript -Path $logFile -Force | Out-Null } catch { }
 
@@ -394,6 +400,8 @@ function Invoke-FrpcDiagnostics {
         Write-Host "Diagnostic log saved to: $((Get-Item $logFile).FullName)" -ForegroundColor Green
     }
     Write-Host ""
+
+    $ErrorActionPreference = $prevEAP
 }
 
 # Function to write the frpc configuration
