@@ -1,0 +1,23 @@
+script/frp.ps1
+  77de88c4d7264cbf 7,27,34,179-398,547-555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "6a46061ca40f35f795931289705e4f2523768028",
+  "prompts": {
+    "77de88c4d7264cbf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2e605db8-bedc-4881-8a7b-d40b2d253adb",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Nikolay Pisarev",
+      "messages": [],
+      "total_additions": 237,
+      "total_deletions": 6,
+      "accepted_lines": 232,
+      "overriden_lines": 0
+    }
+  }
+}
